@@ -448,6 +448,74 @@ def Plot_beam(beam_to_Plot,c_min,c_max,N,pix_size,plot_width,title):
     plt.show()
     return(0)
 
+
+#################################################################################################################################################################################################################################################################################################################################################################################################################################
+
+
+def create_beam_secpeaks(pix_size, FWHMx, FWHMy, theta, array_dB, r, r1, X, Y, a, ellipticity):
+    ''' FWHMx, FWHMy = FWHM of x,y beams
+        theta = angle of rotation of the beam (degrees)
+        array_dB = array of max values of the secondary peaks
+        r = array (same dim as array_dB) of the ANGULAR distance from the center
+        r1 = width of the rings (sec peaks)
+        X, Y = coordinates
+        a = major axis for the elliptical rings
+        ellipticity
+    '''
+    # from degrees to distance in pixels
+    r1 = r1/pix_size 
+
+    # if theta is not zero, we rotate the coordinates
+    X_rotated = X * np.cos(np.radians(theta)) - Y * np.sin(np.radians(theta))
+    Y_rotated = X * np.sin(np.radians(theta)) + Y * np.cos(np.radians(theta))
+
+    X = X_rotated
+    Y = Y_rotated
+
+    # MAIN BEAM ###################################################################
+    wx = FWHMx / np.sqrt(8 * np.log(2))
+    wy = FWHMy / np.sqrt(8 * np.log(2))
+
+    beam_x = np.exp(-2 * (X**2 / wx**2 + Y**2 / wy**2))
+    beam_y = np.exp(-2 * (Y**2 / wx**2 + X**2 / wy**2))
+
+
+    # SECONDARY RINGS ############################################################
+    sec_rings_x = np.zeros_like(X)
+    sec_rings_y = np.zeros_like(Y)
+
+    for i in range(len(array_dB)):
+        # Correction of ellipticity values or the secondary rings turn out flattened. If we want a circle (ell = 1) the correction is not valid
+        if (ellipticity ==1):
+            a = a
+            b = a * (ellipticity)
+        else:
+            a = a
+            b = a * (ellipticity-0.5)
+
+        distance_x = np.sqrt((X / b)**2 + (Y / a)**2)  # ellisse x
+        distance_y = np.sqrt((X / a)**2 + (Y / b)**2)  # ellisse y
+        
+        normalized_distance_x = (distance_x - r1[i]) / r
+        normalized_distance_y = (distance_y - r1[i]) / r
+        
+        max_value = 10**(array_dB[i] / 10)
+        
+        gaussian_distribution_x = np.exp(-(normalized_distance_x)**2 / 0.8)
+        gaussian_distribution_y = np.exp(-(normalized_distance_y)**2 / 0.8)
+        
+        sec_rings_x += max_value * gaussian_distribution_x
+        sec_rings_y += max_value * gaussian_distribution_y
+
+    # TOT BEAM ###################################################################
+    beam_x_real = beam_x + sec_rings_x
+    beam_y_real = beam_y + sec_rings_y
+
+    # NORMALIZATION #############################################################
+    beam_x_real /= np.sum(beam_x_real)
+    beam_y_real /= np.sum(beam_y_real)
+
+    return beam_x, beam_y, sec_rings_x, sec_rings_y, beam_x_real, beam_y_real
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
 
 def make_little_buddies(N,pix_size,beam_size_fwhp,bs,main_beam_peak):
