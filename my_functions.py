@@ -428,7 +428,7 @@ def make_2d_beam_cordinates(N,pix_size):
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
 
 
-def Plot_beam(beam_to_Plot,c_min,c_max,N,pix_size,plot_width,title):
+def Plot_beam(beam_to_Plot,c_min,c_max,N,pix_size,plot_width,title, axis):
     print("beam max:",np.max(beam_to_Plot),"beam min:",np.std(beam_to_Plot))
     ## set the range
     N_bins = np.floor(plot_width / pix_size / 2.)
@@ -441,8 +441,8 @@ def Plot_beam(beam_to_Plot,c_min,c_max,N,pix_size,plot_width,title):
     im.set_clim(c_min,c_max)
     cbar = plt.colorbar()
     im.set_extent([0,X_width,0,Y_width])
-    plt.ylabel('angle [arcmin]')
-    plt.xlabel('angle [arcmin]')
+    plt.ylabel(axis)
+    plt.xlabel(axis)
     cbar.set_label('amplitud (arb)', rotation=270)
     plt.title(title)
     plt.show()
@@ -615,28 +615,28 @@ def make_monopole_dipole_quadrupole(N,pix_size,beam_size_fwhp,bs):
 
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
 
-def make_systematics_beams(N,pix_size,beam_size_fwhp,bs):
+# FROM THE FUNCTIONS make_little_buddies, make_ghosting_beam and make_cross_talk_beam_grid WE ADD SYSTEMATICS TO THE BEAM
+def make_systematics_beams(N,pix_size,beam_size_fwhp, beam,bs):
+    
     # intitalize the beam to zero
     B_TT=B_QQ=B_UU=B_QT=B_UT=B_QU=B_UQ=0.
     
-    # make a 2d gaussian --- this is the main beam 
-    main_beam = make_2d_gaussian_beam(N,pix_size,beam_size_fwhp)
     ## merge this into the beam
-    B_TT += main_beam
-    B_QQ += main_beam
-    B_UU += main_beam
+    B_TT += beam
+    B_QQ += beam
+    B_UU += beam
     
-    main_beam_peak = np.max(main_beam)
+    beam_peak = np.max(beam)
     
     # make the little buddies
-    Budy_TT,Budy_QT,Budy_UT = make_little_buddies(N,pix_size,beam_size_fwhp,bs,main_beam_peak)
+    Budy_TT,Budy_QT,Budy_UT = make_little_buddies(N,pix_size,beam_size_fwhp,bs,beam_peak)
     ## merge this into the beam
     B_TT += Budy_TT
     B_QT += Budy_QT
     B_UT += Budy_UT
 
     # make the ghosting shelf
-    shelf = make_ghosting_beam(N,pix_size,beam_size_fwhp,bs,main_beam_peak)
+    shelf = make_ghosting_beam(N,pix_size,beam_size_fwhp,bs,beam_peak)
     ## merge this into the beam
     B_TT += shelf
     B_QQ += shelf
@@ -646,13 +646,14 @@ def make_systematics_beams(N,pix_size,beam_size_fwhp,bs):
     # make a hex grid centered on the beam
     hex_grid = make_cross_talk_beam_grid(N,pix_size,beam_size_fwhp,bs)
     #convolve the hex grid with the beam
-    cross_talk = convlolve(hex_grid,main_beam)
+    cross_talk = convlolve(hex_grid,beam)
     ## merge this into the beam
     B_TT += cross_talk
     B_QQ += cross_talk
     B_UU += cross_talk
     B_QT += cross_talk
     B_UT += cross_talk
+    
     
     ## add the monopole + dipole + quadrupole T->P leakages
     # make the beam modes
@@ -668,12 +669,11 @@ def make_systematics_beams(N,pix_size,beam_size_fwhp,bs):
     TtoU += bs["TtoU"]["quad_x"] * quad_x
     TtoU += bs["TtoU"]["quad_45"] * quad_45
     ## add to the beams
-    B_QT += TtoQ
-    B_UT += TtoU
+    #B_QT += TtoQ
+    #B_UT += TtoU
     
-
-    return(B_TT,B_QQ,B_UU,B_QT,B_UT,B_QU,B_UQ)
-
+    
+    return(B_TT,B_QQ,B_UU,B_QT,B_UT,B_QU,B_UQ)  
 
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
 def convolve_map_polarized_systmatic_beam(B_TT,B_QQ,B_UU,B_QT,B_UT,B_QU,B_UQ,QMap,UMap,TMap):
@@ -760,7 +760,7 @@ def richardson_lucy_polarized(image, psf_x, psf_y, im_deconv=None, num_iter=50, 
 
     return im_deconv_x, im_deconv_y
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
-def convolve_map_with_beam(N,pix_size,beam_x,beam_y, Map):
+def convolve_map_with_beam1(N,pix_size,beam_x,beam_y, Map):
     
     #FT
     FT_Map    = np.fft.fft2(np.fft.fftshift(Map))
@@ -776,6 +776,15 @@ def convolve_map_with_beam(N,pix_size,beam_x,beam_y, Map):
     return(convolved_map)
 
 
+
+def convolve_map_with_beam(Map, beam):
+
+    FT_beam = np.fft.fft2(np.fft.fftshift(beam))
+    FT_Map  = np.fft.fft2(np.fft.fftshift(Map))
+    
+    convolved_map = np.fft.fftshift(np.real(np.fft.ifft2(FT_beam*FT_Map)))
+
+    return(convolved_map)
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
 # da MAPEXT ( https://github.com/tjrennie/MAPEXT)
 def richardson_lucy(image, psf, im_deconv=None, num_iter=1, clip=False, 
@@ -804,7 +813,65 @@ def richardson_lucy(image, psf, im_deconv=None, num_iter=1, clip=False,
     return im_deconv
 
 
+
+def correct_lr(map, init_beam,N, pix_size, mode='onestep',pad = None, filter_eps=1e-10, eps=1e-12, post_f=None, iter=50):
+    from copy import deepcopy
+    # GET MAP PARAMETERS 
+    N = int(N)
+    ones = np.ones(N)
+    inds = (np.arange(N)+.5 - N/2.) * pix_size
+    X = np.outer(ones,inds)
+    Y = np.transpose(X)
+    r = np.sqrt(X**2. + Y**2.)
+    
+    
+    
+    #shape = [4*(aMap.MAP.shape[0]+1)-1, 4*(aMap.MAP.shape[1]+1)-1]
+    #init_bmap, r = init_beam.return_bMap(pixscale=pixscale,shape=[811,811],rad=True, oversamp=1)
+    init_bmap = map
+    
+    init_bmap = 10**(init_bmap/10) * merge_cosine(r, center = 345, width=40)
+    init_bmap /= np.nanmax(init_bmap)
+  
+    init_bmap = init_bmap / np.nanmax(init_bmap)
+
+    init_bmap[init_bmap<0] = 0.
+    
+    # DECONVOLVE
+    if mode=='onestep':
+        psf_ = init_bmap / np.nansum(init_bmap)
+        dat_ = deepcopy(map)
+        if pad!=None:
+            pad_pix = int(pad*np.max(np.shape(dat_)))
+            new = np.ones([np.shape(dat_)[0]+(2*pad_pix), np.shape(dat_)[1]+(2*pad_pix)])*np.nanmedian(dat_)
+            new[pad_pix:-pad_pix, pad_pix:-pad_pix] = dat_
+            dat_ = new
+        map_ = deepcopy(dat_)
+        if iter==None:
+            SNAPSHOTS = np.array([0,10,20,30,40,50])
+        else:
+            SNAPSHOTS = np.array([0,int(iter)])
+        
+        allframes = np.zeros([np.nanmax(SNAPSHOTS)+1,np.shape(dat_)[0],np.shape(dat_)[1]])
+        frames = np.zeros([len(SNAPSHOTS),np.shape(dat_)[0],np.shape(dat_)[1]])
+        frames[0] = map_
+        allframes[0] = map_
+        
+        n_iter = 0
+        i = 1
+        
+    return map_
+
+
+
+def merge_cosine(X,center=30,width=5):
+    mask = np.ones(X.shape)
+    mask[X>center] = 0.
+    funcmsk = np.all([X>center-width/2,X<center+width/2],axis=0)
+    mask[funcmsk] = (1-np.sin((X[funcmsk]-center)*np.pi/width))/2
+    return mask**2
 #################################################################################################################################################################################################################################################################################################################################################################################################################################
+'''
 def convolve_map_with_beam(N,pix_size,beam_x,beam_y, Map):
     
     #FT
@@ -834,3 +901,4 @@ def convolve_map_with_beam(N,pix_size,beam_x,beam_y, Map):
     
     
     return(combined_map_real, convolved_map_x_real, convolved_map_y_real)
+    '''
